@@ -44,6 +44,12 @@ struct bpf_dynptr;
 struct iphdr;
 struct ipv6hdr;
 
+enum map_access {
+  MAP_READ_ONLY,
+  MAP_READ_WRITE,
+  MAP_WRITE_ONLY
+};
+
 /*
  * Helper structure used by eBPF C program
  * to describe BPF map attributes to libbpf loader
@@ -55,6 +61,7 @@ struct bpf_map_def {
   unsigned int max_entries;
   unsigned int map_flags;
   unsigned int map_id;
+  enum map_access kern_access_permissions;
 };
 
 #if (defined USES_BPF_MAPS) && (defined KLEE_VERIFICATION)
@@ -76,6 +83,8 @@ unsigned int bpf_map_ctr = 0;
 unsigned int record_calls = 0;
 char *prefix; /* For tracing */
 
+int use_copy = 0;
+
 /* This is the same list of PCVs and OVs as in the contract file. This is
  * unfortunate duplication and should be fixed */
 
@@ -95,6 +104,7 @@ int traced_variable_type(char *variable, char **type) {
 void bpf_begin(){ record_calls = 1;}
 
 void bpf_map_init_stub(struct bpf_map_def *map, char *name, char *key_type, char *val_type) {
+  assert(bpf_map_ctr < MAX_BPF_MAPS);
   map->map_id = bpf_map_ctr++;
   if (map->type == 2 | map->type == 6 | map->type == 14 || map->type == 16) {
     // Array, per-cpu Array, devmap, cpumap This should be in terms of the enum
@@ -134,6 +144,8 @@ void bpf_map_reset_stub(struct bpf_map_def* map) {
   struct bpf_map_def *map_ptr = (struct bpf_map_def *) map;
   if (bpf_map_stub_types[map_ptr->map_id] == ArrayStub)
     array_reset(bpf_map_stubs[map_ptr->map_id]);
+  else if (bpf_map_stub_types[map_ptr->map_id] == MapStub)
+    map_reset(bpf_map_stubs[map_ptr->map_id]);
   else
     assert(0 && "Reset unsupported for given map type");
 }
@@ -144,6 +156,8 @@ void bpf_map_reset_stub(struct bpf_map_def* map) {
 #define BPF_MAP_INIT(x,y,z)
 #define BPF_MAP_OF_MAPS_INIT(x,y,z,w)
 #endif
+
+
 
 /*
  * bpf_map_lookup_elem
@@ -156,18 +170,21 @@ void bpf_map_reset_stub(struct bpf_map_def* map) {
  */
 
 #ifdef USES_BPF_MAP_LOOKUP_ELEM
+#define HAS_LOOKUP_ACCESS(access) (!access || access == MAP_READ_ONLY || access == MAP_READ_WRITE)
+
 static __attribute__ ((noinline)) void *bpf_map_lookup_elem(void *map, const void *key) {
   // if(record_calls){
   //   klee_trace_ret_just_ptr(sizeof(void*));
   //   klee_add_bpf_call();
   // }
   struct bpf_map_def *map_ptr = ((struct bpf_map_def *)map);
+  klee_assert(HAS_LOOKUP_ACCESS(map_ptr->kern_access_permissions));
   // TRACE_VAL((uint32_t)(map_ptr), "map", _u32)
   // TRACE_VAR(map_ptr->type, "bpf_map_type");
   if (bpf_map_stub_types[map_ptr->map_id] == ArrayStub)
     return array_lookup_elem(bpf_map_stubs[map_ptr->map_id], key);
   else if (bpf_map_stub_types[map_ptr->map_id] == MapStub)
-    return map_lookup_elem(bpf_map_stubs[map_ptr->map_id], key);
+    return map_lookup_elem(bpf_map_stubs[map_ptr->map_id + use_copy], key);
   else if (bpf_map_stub_types[map_ptr->map_id] == MapofMapStub)
     return map_of_map_lookup_elem(bpf_map_stubs[map_ptr->map_id], key);
   else
@@ -200,6 +217,8 @@ static void *(*bpf_map_lookup_elem)(void *map, const void *key) = (void *) 1;
  */
 
 #ifdef USES_BPF_MAP_UPDATE_ELEM
+#define HAS_UPDATE_ACCESS(access) (!access || access == MAP_WRITE_ONLY || access == MAP_READ_WRITE)
+
 static __attribute__ ((noinline)) long bpf_map_update_elem(void *map, const void *key, const void *value,
                                 __u64 flags) {
   // if(record_calls){
@@ -207,12 +226,13 @@ static __attribute__ ((noinline)) long bpf_map_update_elem(void *map, const void
   //   klee_add_bpf_call();
   // }
   struct bpf_map_def *map_ptr = ((struct bpf_map_def *)map);
+  klee_assert(HAS_UPDATE_ACCESS(map_ptr->kern_access_permissions));
   // TRACE_VAL((uint32_t)(map_ptr), "map", _u32)
   // TRACE_VAR(map_ptr->type, "bpf_map_type");
   if (bpf_map_stub_types[map_ptr->map_id] == ArrayStub)
-    return array_update_elem(bpf_map_stubs[map_ptr->map_id], key, value, flags);
+    return array_update_elem(bpf_map_stubs[map_ptr->map_id + use_copy], key, value, flags);
   else if (bpf_map_stub_types[map_ptr->map_id] == MapStub)  // XSK_MAP should only update from userspace
-    return map_update_elem(bpf_map_stubs[map_ptr->map_id], key, value, flags);
+    return map_update_elem(bpf_map_stubs[map_ptr->map_id + use_copy], key, value, flags);
   else
     assert(0 && "Unsupported map type");
 }
@@ -230,18 +250,29 @@ static long (*bpf_map_update_elem)(void *map, const void *key,
  * 	0 on success, or a negative error in case of failure.
  */
 #ifdef USES_BPF_MAP_DELETE_ELEM
+#define HAS_DELETE_ACCESS(access) (!access || access == MAP_WRITE_ONLY || access == MAP_READ_WRITE)
 static __attribute__ ((noinline)) long bpf_map_delete_elem(void *map, const void *key) {
   struct bpf_map_def *map_ptr = ((struct bpf_map_def *)map);
+  klee_assert(HAS_DELETE_ACCESS(map_ptr->kern_access_permissions));
   // TRACE_VAL((uint32_t)(map_ptr), "map", _u32)
   // TRACE_VAR(map_ptr->type, "bpf_map_type");
   if (bpf_map_stub_types[map_ptr->map_id] == MapStub)
-    return map_delete_elem(bpf_map_stubs[map_ptr->map_id], key);
+    return map_delete_elem(bpf_map_stubs[map_ptr->map_id + use_copy], key);
   else
     assert(0 && "Unsupported map type");
 }
 #else
 static long (*bpf_map_delete_elem)(void *map, const void *key) = (void *) 3;
 #endif
+
+void duplicate_maps() {
+  for (int i = 0; i < bpf_map_ctr; i++) {
+    if (bpf_map_stub_types[i] == MapStub) {
+        bpf_map_stubs[i+bpf_map_ctr] = map_get_copy(bpf_map_stubs[i]);
+    }
+    else assert(0 && "Unsupported map type");
+  }
+}
 
 /*
  * bpf_probe_read
@@ -1018,6 +1049,7 @@ static __attribute__ ((noinline)) __s64 bpf_csum_diff(__be32 *from, __u32 from_s
   // }
   __s64 csum;
   klee_make_symbolic(&csum, sizeof(__s64), "Updated Checksum");
+  csum = 0x1a1f1a1f;
   return csum;
 }
 #else
@@ -1615,7 +1647,7 @@ static __attribute__ ((noinline)) long bpf_redirect_map (void *map, __u32 key, _
   if (bpf_map_stub_types[map_ptr->map_id] == ArrayStub)
     redirected_elem = array_lookup_elem(bpf_map_stubs[map_ptr->map_id], &key);
   else if (bpf_map_stub_types[map_ptr->map_id] == MapStub)
-    redirected_elem = map_lookup_elem(bpf_map_stubs[map_ptr->map_id], &key);
+    redirected_elem = map_lookup_elem(bpf_map_stubs[map_ptr->map_id + use_copy], &key);
   else if (bpf_map_stub_types[map_ptr->map_id] == MapofMapStub)
     redirected_elem = map_of_map_lookup_elem(bpf_map_stubs[map_ptr->map_id], &key);
   else
