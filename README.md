@@ -1,3 +1,34 @@
+# Modified eBPF-SE for Functional Verification of eBPF programs
+
+This repository is a modified version of eBPF-SE for functional verification of programs.
+
+## Usage
+
+Set up the environment as follows:
+```bash
+cd tool
+./setup-tool.sh -k funcVer
+source paths.sh
+```
+
+To test any of the examples, for example Katran:
+```bash
+cd examples/katran  # replace with desired example
+make verify
+```
+
+The output (map correlation information, the ReadSet and WriteSet information) are present in the klee-out-N directory (under the filenames mapCorrelation and readWriteInformation).
+
+To test the analysis between programs:
+```bash
+cd examples/evaluation-two-program-fw-nat
+make verify-two-phase
+```
+
+The output (Overlap information) is present in the klee-out directory, under the filename "overlap".
+
+This repository is forked from the [original ebpf-se](https://github.com/dslab-epfl/ebpf-se) repository. The original README is in the sections that follow.
+
 # eBPF-SE
 
 This repository hosts eBPF-SE, a tool that can be used to symbolically execute programs written using the Linux kernel's eBPF framework.

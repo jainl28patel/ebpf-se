@@ -38,3 +38,5 @@ klee-last
 _build
 tags
 paths.sh
+*replayer
+*.out
