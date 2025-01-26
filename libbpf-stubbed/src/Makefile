@@ -49,12 +49,14 @@ endif
 OBJDIR ?= .
 SHARED_OBJDIR := $(OBJDIR)/sharedobjs
 STATIC_OBJDIR := $(OBJDIR)/staticobjs
+BITCODE_OBJDIR := $(OBJDIR)/bitcodeobjs
 OBJS := bpf.o btf.o libbpf.o libbpf_errno.o netlink.o \
 	nlattr.o str_error.o libbpf_probes.o bpf_prog_linfo.o \
 	btf_dump.o hashmap.o ringbuf.o strset.o linker.o gen_loader.o \
 	relo_core.o usdt.o zip.o
 SHARED_OBJS := $(addprefix $(SHARED_OBJDIR)/,$(OBJS))
 STATIC_OBJS := $(addprefix $(STATIC_OBJDIR)/,$(OBJS))
+BITCODE_OBJS := $(addprefix $(BITCODE_OBJDIR)/,$(patsubst %.o,%.bc,$(OBJS)))
 
 STATIC_LIBS := $(OBJDIR)/libbpf.a
 ifndef BUILD_STATIC_ONLY
@@ -98,7 +100,7 @@ UAPIDIR ?= $(PREFIX)/include
 
 TAGS_PROG := $(if $(shell which etags 2>/dev/null),etags,ctags)
 
-all: $(STATIC_LIBS) $(SHARED_LIBS) $(PC_FILE)
+all: $(STATIC_LIBS) $(SHARED_LIBS) $(PC_FILE) $(OBJDIR)/libbpf.bc
 
 $(OBJDIR)/libbpf.a: $(STATIC_OBJS)
 	$(call msg,AR,$@)
@@ -134,6 +136,18 @@ $(SHARED_OBJDIR)/%.o: %.c | $(SHARED_OBJDIR)
 	$(call msg,CC,$@)
 	$(Q)$(CC) $(ALL_CFLAGS) $(SHARED_CFLAGS) $(CPPFLAGS) -c $< -o $@
 
+$(BITCODE_OBJDIR):
+	$(call msg,MKDIR,$@)
+	$(Q)mkdir -p $@
+
+$(BITCODE_OBJDIR)/%.bc: %.c | $(BITCODE_OBJDIR)
+	$(call msg,LLVM-CC,$@)
+	$(Q)clang $(ALL_CFLAGS) $(CPPFLAGS) -emit-llvm -c $< -o $@
+
+$(OBJDIR)/libbpf.bc: $(BITCODE_OBJS)
+	$(call msg,LLVM-LINK,$@)
+	$(Q)llvm-link $^ -o $@
+
 define do_install
 	$(call msg,INSTALL,$1)
 	$(Q)if [ ! -d '$(DESTDIR)$2' ]; then		\
@@ -167,7 +181,7 @@ install_pkgconfig: $(PC_FILE)
 
 clean:
 	$(call msg,CLEAN)
-	$(Q)rm -rf *.o *.a *.so *.so.* *.pc $(SHARED_OBJDIR) $(STATIC_OBJDIR)
+	$(Q)rm -rf *.o *.a *.so *.so.* *.pc *.bc $(SHARED_OBJDIR) $(STATIC_OBJDIR) $(BITCODE_OBJDIR)
 
 .PHONY: cscope tags force
 cscope:
