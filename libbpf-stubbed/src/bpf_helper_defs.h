@@ -3605,57 +3605,6 @@ static __u64 (*bpf_sk_cgroup_id)(void *sk) = (void *) 128;
  */
 static __u64 (*bpf_sk_ancestor_cgroup_id)(void *sk, int ancestor_level) = (void *) 129;
 
-/*
- * bpf_ringbuf_output
- *
- * 	Copy *size* bytes from *data* into a ring buffer *ringbuf*.
- * 	If **BPF_RB_NO_WAKEUP** is specified in *flags*, no notification
- * 	of new data availability is sent.
- * 	If **BPF_RB_FORCE_WAKEUP** is specified in *flags*, notification
- * 	of new data availability is sent unconditionally.
- * 	If **0** is specified in *flags*, an adaptive notification
- * 	of new data availability is sent.
- *
- * 	An adaptive notification is a notification sent whenever the user-space
- * 	process has caught up and consumed all available payloads. In case the user-space
- * 	process is still processing a previous payload, then no notification is needed
- * 	as it will process the newly added payload automatically.
- *
- * Returns
- * 	0 on success, or a negative error in case of failure.
- */
-#ifdef USES_BPF_RINGBUF_OUTPUT
-static long bpf_ringbuf_output(void *ringbuf, void *data, __u64 size, __u64 flags) {
-  long result;
-  klee_make_symbolic(&result, sizeof(long), "ringbuf_output_result");
-  klee_assume(result <= 0);
-  return result;
-}
-#else
-static long (*bpf_ringbuf_output)(void *ringbuf, void *data, __u64 size, __u64 flags) = (void *) 130;
-#endif
-
-/*
- * bpf_ringbuf_reserve
- *
- * 	Reserve *size* bytes of payload in a ring buffer *ringbuf*.
- * 	*flags* must be 0.
- *
- * Returns
- * 	Valid pointer with *size* bytes of memory available; NULL,
- * 	otherwise.
- */
-#ifdef USES_BPF_RINGBUF_RESERVE
-static void* bpf_ringbuf_reserve(void *ringbuf, __u64 size, __u64 flags) {
-  assert(flags == 0);
-  if (!klee_int("ringbuf_reserves_success")) {
-    return NULL;
-  }
-  return malloc(size);
-}
-#else
-static void *(*bpf_ringbuf_reserve)(void *ringbuf, __u64 size, __u64 flags) = (void *) 131;
-#endif
 
 /*
  * bpf_ringbuf_submit
